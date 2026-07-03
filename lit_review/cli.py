@@ -46,6 +46,11 @@ def cli(ctx: click.Context, db_path: str) -> None:
     """Literature review automation CLI."""
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = Path(db_path)
+    click.echo(
+        f"Sources: Semantic Scholar {'on' if config.USE_SEMANTIC_SCHOLAR else 'off'}, "
+        f"OpenAlex on (email={'yes' if config.OPENALEX_EMAIL else 'no'}), "
+        f"CrossRef on (email={'yes' if config.CROSSREF_EMAIL else 'no'})"
+    )
 
 
 @cli.command("init-db")

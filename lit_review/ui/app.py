@@ -36,6 +36,12 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 init_db()
 
+print(
+    f"Sources: Semantic Scholar {'on' if config.USE_SEMANTIC_SCHOLAR else 'off'}, "
+    f"OpenAlex on (email={'yes' if config.OPENALEX_EMAIL else 'no'}), "
+    f"CrossRef on (email={'yes' if config.CROSSREF_EMAIL else 'no'})"
+)
+
 
 def _get_db_path() -> Path:
     return Path(config.DEFAULT_DB_PATH)

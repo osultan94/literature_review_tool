@@ -5,9 +5,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
+
+# Load environment variables from .env then .env.local (latter wins)
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.local", override=True)
 DEFAULT_DB_PATH = DATA_DIR / "lit_review.db"
 
 # Ensure data directory exists
