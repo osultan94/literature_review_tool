@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Literature Review Automation</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Literature Review Automation</h1>
+        <nav>
+            <button data-tab="dashboard" class="active">Dashboard</button>
+            <button data-tab="papers">Papers</button>
+            <button data-tab="criteria">Criteria</button>
+            <button data-tab="weights">Weights</button>
+            <button data-tab="seeds">Seeds</button>
+            <button data-tab="runs">Run</button>
+            <button data-tab="export">Export</button>
+        </nav>
+    </header>
+
+    <main>
+        <section id="dashboard" class="tab active">
+            <h2>Dashboard</h2>
+            <div id="dashboard-content"></div>
+        </section>
+
+        <section id="papers" class="tab">
+            <h2>Papers</h2>
+            <div class="toolbar">
+                <input type="text" id="paper-search" placeholder="Search title/abstract...">
+                <select id="paper-verdict">
+                    <option value="">All verdicts</option>
+                    <option value="include">Include</option>
+                    <option value="exclude">Exclude</option>
+                    <option value="uncertain">Uncertain</option>
+                    <option value="unscreened">Unscreened</option>
+                </select>
+                <select id="paper-sort">
+                    <option value="score">Score</option>
+                    <option value="title">Title</option>
+                    <option value="year">Year</option>
+                    <option value="citations">Citations</option>
+                </select>
+                <button id="paper-refresh">Refresh</button>
+            </div>
+            <div id="papers-table-wrap"></div>
+        </section>
+
+        <section id="criteria" class="tab">
+            <h2>Criteria</h2>
+            <div id="criteria-versions"></div>
+            <h3>New version</h3>
+            <textarea id="criteria-text" rows="12" placeholder="Paste inclusion/exclusion criteria here..."></textarea>
+            <button id="criteria-save">Save & Activate</button>
+        </section>
+
+        <section id="weights" class="tab">
+            <h2>Weight Config</h2>
+            <div id="weights-versions"></div>
+            <h3>New config</h3>
+            <form id="weights-form">
+                <label>LLM verdict <input type="number" step="0.05" name="llm_verdict" value="0.40" required></label>
+                <label>Citations / year <input type="number" step="0.05" name="citations_per_year" value="0.25" required></label>
+                <label>Recency <input type="number" step="0.05" name="recency" value="0.20" required></label>
+                <label>Venue tier <input type="number" step="0.05" name="venue_tier" value="0.15" required></label>
+                <button type="submit">Save & Score</button>
+            </form>
+        </section>
+
+        <section id="seeds" class="tab">
+            <h2>Seeds</h2>
+            <form id="seed-upload-form">
+                <input type="file" name="file" accept=".csv" required>
+                <button type="submit">Upload CSV</button>
+            </form>
+            <div id="seeds-table-wrap"></div>
+        </section>
+
+        <section id="runs" class="tab">
+            <h2>Run Pipeline</h2>
+            <div class="run-grid">
+                <button class="run-btn" data-stage="resolve">Resolve titles</button>
+                <button class="run-btn" data-stage="harvest">Harvest metadata</button>
+                <button class="run-btn" data-stage="dedupe">Deduplicate</button>
+                <button class="run-btn" data-stage="screen">Screen abstracts</button>
+                <button class="run-btn" data-stage="score">Compute scores</button>
+                <button class="run-btn" data-stage="snowball">Snowball round</button>
+                <button class="run-btn" data-stage="export">Export CSVs</button>
+            </div>
+            <pre id="run-log"></pre>
+        </section>
+
+        <section id="export" class="tab">
+            <h2>Export</h2>
+            <p><a href="/api/export/comprehensive" download>Download comprehensive.csv</a></p>
+            <p><a href="/api/export/ranked" download>Download final_ranked.csv</a></p>
+        </section>
+    </main>
+
+    <div id="spinner" class="hidden">Running...</div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
