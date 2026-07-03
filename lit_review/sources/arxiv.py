@@ -9,7 +9,7 @@ import httpx
 from lit_review import config, utils
 from lit_review.models import ResolvedCandidate
 
-BASE_URL = "http://export.arxiv.org/api/query"
+BASE_URL = "https://export.arxiv.org/api/query"
 
 
 def _to_candidate(entry: dict[str, Any], query_title: str) -> ResolvedCandidate:

@@ -36,11 +36,13 @@ def _openalex_normalize(raw: dict[str, Any]) -> dict[str, Any]:
         author = authorship.get("author") or {}
         if author.get("display_name"):
             authors.append(author["display_name"])
+    primary_location = raw.get("primary_location") or {}
+    source = (primary_location.get("source") or {}) if isinstance(primary_location, dict) else {}
     return {
         "title": raw.get("display_name"),
         "doi": (raw.get("ids") or {}).get("doi") or raw.get("doi"),
         "abstract": raw.get("abstract"),
-        "venue": (raw.get("primary_location") or {}).get("source", {}).get("display_name"),
+        "venue": source.get("display_name"),
         "pub_year": utils.parse_year(raw.get("publication_year")),
         "citation_count": raw.get("cited_by_count"),
         "authors": authors,
@@ -181,75 +183,81 @@ async def harvest_metadata(
         papers = [row_to_paper(row) for row in rows]
 
         harvested = 0
+        failed = 0
         for paper in papers:
-            sources = await _harvest_paper(paper, client)
-            if not sources:
-                continue
+            try:
+                sources = await _harvest_paper(paper, client)
+                if not sources:
+                    continue
 
-            for source in sources:
+                for source in sources:
+                    conn.execute(
+                        """
+                        INSERT INTO paper_sources (
+                            paper_id, source_name, source_paper_id, raw_json, fetched_at
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(paper_id, source_name) DO UPDATE SET
+                            raw_json=excluded.raw_json,
+                            fetched_at=excluded.fetched_at
+                        """,
+                        (
+                            paper.id,
+                            source["source_name"],
+                            _extract_source_id(source),
+                            utils.to_json_blob(source["raw"]),
+                            utils.utc_now(),
+                        ),
+                    )
+
+                reconciled = _reconcile(sources)
                 conn.execute(
                     """
-                    INSERT INTO paper_sources (
-                        paper_id, source_name, source_paper_id, raw_json, fetched_at
-                    )
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(paper_id, source_name) DO UPDATE SET
-                        raw_json=excluded.raw_json,
-                        fetched_at=excluded.fetched_at
+                    UPDATE papers SET
+                        canonical_title = COALESCE(?, canonical_title),
+                        doi = COALESCE(?, doi),
+                        abstract = COALESCE(?, abstract),
+                        venue = COALESCE(?, venue),
+                        venue_tier = COALESCE(?, venue_tier),
+                        pub_year = COALESCE(?, pub_year),
+                        citation_count = COALESCE(?, citation_count),
+                        citation_count_fetched_at = COALESCE(?, citation_count_fetched_at),
+                        authors = COALESCE(?, authors),
+                        primary_source_name = COALESCE(?, primary_source_name),
+                        updated_at = ?
+                    WHERE id = ?
                     """,
                     (
-                        paper.id,
-                        source["source_name"],
-                        _extract_source_id(source),
-                        utils.to_json_blob(source["raw"]),
+                        reconciled.get("title"),
+                        reconciled.get("doi"),
+                        reconciled.get("abstract"),
+                        reconciled.get("venue"),
+                        _venue_tier(reconciled.get("venue")),
+                        reconciled.get("pub_year"),
+                        reconciled.get("citation_count"),
+                        utils.utc_now() if reconciled.get("citation_count") is not None else None,
+                        (
+                            utils.to_json_blob(reconciled.get("authors"))
+                            if reconciled.get("authors")
+                            else None
+                        ),
+                        reconciled.get("primary_source_name"),
                         utils.utc_now(),
+                        paper.id,
                     ),
                 )
-
-            reconciled = _reconcile(sources)
-            conn.execute(
-                """
-                UPDATE papers SET
-                    canonical_title = COALESCE(?, canonical_title),
-                    doi = COALESCE(?, doi),
-                    abstract = COALESCE(?, abstract),
-                    venue = COALESCE(?, venue),
-                    venue_tier = COALESCE(?, venue_tier),
-                    pub_year = COALESCE(?, pub_year),
-                    citation_count = COALESCE(?, citation_count),
-                    citation_count_fetched_at = COALESCE(?, citation_count_fetched_at),
-                    authors = COALESCE(?, authors),
-                    primary_source_name = COALESCE(?, primary_source_name),
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    reconciled.get("title"),
-                    reconciled.get("doi"),
-                    reconciled.get("abstract"),
-                    reconciled.get("venue"),
-                    _venue_tier(reconciled.get("venue")),
-                    reconciled.get("pub_year"),
-                    reconciled.get("citation_count"),
-                    utils.utc_now() if reconciled.get("citation_count") is not None else None,
-                    (
-                        utils.to_json_blob(reconciled.get("authors"))
-                        if reconciled.get("authors")
-                        else None
-                    ),
-                    reconciled.get("primary_source_name"),
-                    utils.utc_now(),
-                    paper.id,
-                ),
-            )
-            conn.commit()
-            harvested += 1
-            logger.info("paper_harvested", paper_id=paper.id, sources=len(sources))
+                conn.commit()
+                harvested += 1
+                logger.info("paper_harvested", paper_id=paper.id, sources=len(sources))
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                logger.error("paper_harvest_failed", paper_id=paper.id, error=str(exc))
+                conn.rollback()
 
     if should_close:
         await client.aclose()
 
-    return {"harvested": harvested}
+    return {"harvested": harvested, "failed": failed}
 
 
 def _extract_source_id(source: dict[str, Any]) -> str:

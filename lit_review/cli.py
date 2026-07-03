@@ -92,7 +92,7 @@ async def harvest(ctx: click.Context) -> None:
     """Harvest and reconcile metadata for resolved papers."""
     async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as client:
         result = await harvest_metadata(db_path=ctx.obj["db_path"], client=client)
-    click.echo(f"Harvested {result['harvested']} papers.")
+    click.echo(f"Harvested {result['harvested']} papers; {result['failed']} failed.")
 
 
 @cli.command()
