@@ -12,7 +12,7 @@ import structlog
 from lit_review import config, utils
 from lit_review.db import get_connection
 from lit_review.models import Paper, PaperOrigin, Verdict
-from lit_review.sources import semantic_scholar
+from lit_review.sources import openalex, semantic_scholar
 
 logger = structlog.get_logger()
 
@@ -38,6 +38,36 @@ def _candidate_from_s2_item(item: dict[str, Any], direction: PaperOrigin) -> Pap
         authors=authors,
         origin=direction,
         discovery_round=0,  # set by caller
+    )
+
+
+def _candidate_from_openalex_work(work: dict[str, Any], direction: PaperOrigin) -> Paper | None:
+    """Convert an OpenAlex work into a Paper."""
+    work_id = work.get("id")
+    title = work.get("display_name")
+    if not work_id or not title:
+        return None
+    authors = []
+    for authorship in work.get("authorships", []):
+        author = authorship.get("author") or {}
+        if author.get("display_name"):
+            authors.append(author["display_name"])
+    return Paper(
+        canonical_title=title,
+        doi=(work.get("ids") or {}).get("doi") or work.get("doi"),
+        primary_source_name="openalex",
+        primary_source_id=work_id,
+        abstract=work.get("abstract"),
+        venue=(work.get("primary_location") or {}).get("source", {}).get("display_name"),
+        venue_tier=_venue_tier(
+            (work.get("primary_location") or {}).get("source", {}).get("display_name")
+        ),
+        pub_year=utils.parse_year(work.get("publication_year")),
+        citation_count=work.get("cited_by_count"),
+        citation_count_fetched_at=utils.utc_now(),
+        authors=authors,
+        origin=direction,
+        discovery_round=0,
     )
 
 
@@ -162,41 +192,69 @@ async def run_snowball_round(
 
         for source_id in source_paper_ids:
             source_row = conn.execute(
-                "SELECT primary_source_id FROM papers WHERE id = ?", (source_id,)
+                "SELECT primary_source_name, primary_source_id FROM papers WHERE id = ?",
+                (source_id,),
             ).fetchone()
             if not source_row or not source_row["primary_source_id"]:
                 continue
-            s2_id = source_row["primary_source_id"]
+            source_name = source_row["primary_source_name"]
+            source_native_id = source_row["primary_source_id"]
 
             fetched_items: list[tuple[Paper, str]] = []
 
+            # Backward snowballing
             if direction in ("backward", "both"):
+                items: list[dict[str, Any]] = []
                 try:
-                    items = await semantic_scholar.fetch_references(
-                        s2_id, client=client, limit=limit
-                    )
-                    total_results += len(items)
-                    for item in items:
-                        paper = _candidate_from_s2_item(item, PaperOrigin.SNOWBALL_BACKWARD)
-                        if paper:
-                            paper.origin_paper_id = source_id
-                            fetched_items.append((paper, "backward"))
+                    if source_name == "semantic_scholar" and config.USE_SEMANTIC_SCHOLAR:
+                        items = await semantic_scholar.fetch_references(
+                            source_native_id, client=client, limit=limit
+                        )
+                    elif source_name == "openalex":
+                        items = await openalex.fetch_references(
+                            source_native_id, client=client, limit=limit
+                        )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("snowball_backward_failed", source_id=source_id, error=str(exc))
+                    logger.warning(
+                        "snowball_backward_failed", source_id=source_id, error=str(exc)
+                    )
 
+                total_results += len(items)
+                for item in items:
+                    if source_name == "semantic_scholar":
+                        paper = _candidate_from_s2_item(item, PaperOrigin.SNOWBALL_BACKWARD)
+                    else:
+                        paper = _candidate_from_openalex_work(item, PaperOrigin.SNOWBALL_BACKWARD)
+                    if paper:
+                        paper.origin_paper_id = source_id
+                        fetched_items.append((paper, "backward"))
+
+            # Forward snowballing
             if direction in ("forward", "both"):
+                items = []
                 try:
-                    items = await semantic_scholar.fetch_citations(
-                        s2_id, client=client, limit=limit
-                    )
-                    total_results += len(items)
-                    for item in items:
-                        paper = _candidate_from_s2_item(item, PaperOrigin.SNOWBALL_FORWARD)
-                        if paper:
-                            paper.origin_paper_id = source_id
-                            fetched_items.append((paper, "forward"))
+                    if source_name == "semantic_scholar" and config.USE_SEMANTIC_SCHOLAR:
+                        items = await semantic_scholar.fetch_citations(
+                            source_native_id, client=client, limit=limit
+                        )
+                    elif source_name == "openalex":
+                        items = await openalex.fetch_citations(
+                            source_native_id, client=client, limit=limit
+                        )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("snowball_forward_failed", source_id=source_id, error=str(exc))
+                    logger.warning(
+                        "snowball_forward_failed", source_id=source_id, error=str(exc)
+                    )
+
+                total_results += len(items)
+                for item in items:
+                    if source_name == "semantic_scholar":
+                        paper = _candidate_from_s2_item(item, PaperOrigin.SNOWBALL_FORWARD)
+                    else:
+                        paper = _candidate_from_openalex_work(item, PaperOrigin.SNOWBALL_FORWARD)
+                    if paper:
+                        paper.origin_paper_id = source_id
+                        fetched_items.append((paper, "forward"))
 
             for paper, _dir in fetched_items:
                 existing_id = _find_existing_paper_id(conn, paper)

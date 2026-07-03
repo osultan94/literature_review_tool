@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from lit_review import config
 from lit_review.models import ResolvedCandidate
 from lit_review.sources import arxiv, crossref, openalex, semantic_scholar
 
@@ -18,12 +19,13 @@ async def search_all(
     client: httpx.AsyncClient | None = None,
 ) -> list[ResolvedCandidate]:
     """Query all configured sources in parallel and merge candidates."""
-    coros = [
-        semantic_scholar.search_by_title(title, client=client),
+    coros: list[Any] = [
         openalex.search_by_title(title, client=client),
         crossref.search_by_title(title, client=client),
         arxiv.search_by_title(title, client=client),
     ]
+    if config.USE_SEMANTIC_SCHOLAR:
+        coros.append(semantic_scholar.search_by_title(title, client=client))
     results = await asyncio.gather(*coros, return_exceptions=True)
     candidates: list[ResolvedCandidate] = []
     for result in results:

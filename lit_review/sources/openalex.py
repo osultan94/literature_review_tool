@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 import httpx
@@ -86,6 +87,64 @@ async def fetch_work(
             return None
         response.raise_for_status()
         return cast(dict[str, Any], response.json())
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+async def fetch_references(
+    work_id: str,
+    client: httpx.AsyncClient | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Fetch works referenced by the given OpenAlex work (backward snowball)."""
+    should_close = client is None
+    client = client or httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT)
+    try:
+        work = await fetch_work(work_id, client=client)
+        if not work:
+            return []
+        refs = work.get("referenced_works", [])[:limit]
+        if not refs:
+            return []
+        # Fetch each referenced work in parallel batches to be polite
+        results: list[dict[str, Any]] = []
+        batch_size = 10
+        for i in range(0, len(refs), batch_size):
+            batch = refs[i : i + batch_size]
+            batch_results = await asyncio.gather(
+                *[fetch_work(rid, client=client) for rid in batch],
+                return_exceptions=True,
+            )
+            for result in batch_results:
+                if isinstance(result, dict):
+                    results.append(result)
+                # Ignore exceptions and None values
+        return results
+    finally:
+        if should_close:
+            await client.aclose()
+
+
+async def fetch_citations(
+    work_id: str,
+    client: httpx.AsyncClient | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Fetch works that cite the given OpenAlex work (forward snowball)."""
+    should_close = client is None
+    client = client or httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT)
+    try:
+        params: dict[str, Any] = {
+            "filter": f"cites:{work_id}",
+            "per-page": min(limit, 200),
+        }
+        if config.OPENALEX_EMAIL:
+            params["mailto"] = config.OPENALEX_EMAIL
+        response = await client.get(f"{BASE_URL}/works", params=params)
+        response.raise_for_status()
+        data = cast(dict[str, Any], response.json())
+        return [item for item in data.get("results", []) if isinstance(item, dict)]
     finally:
         if should_close:
             await client.aclose()

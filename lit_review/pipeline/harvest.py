@@ -137,7 +137,11 @@ async def _harvest_paper(
             return
         sources.append({"source_name": name, "raw": result})
 
-    if paper.primary_source_name == "semantic_scholar" and paper.primary_source_id:
+    if (
+        config.USE_SEMANTIC_SCHOLAR
+        and paper.primary_source_name == "semantic_scholar"
+        and paper.primary_source_id
+    ):
         await _add_source(
             "semantic_scholar", semantic_scholar.fetch_paper(paper.primary_source_id, client=client)
         )

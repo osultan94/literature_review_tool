@@ -18,6 +18,9 @@ SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
 OPENALEX_EMAIL = os.getenv("OPENALEX_EMAIL", "")
 CROSSREF_EMAIL = os.getenv("CROSSREF_EMAIL", "")
 
+# Source toggles
+USE_SEMANTIC_SCHOLAR = os.getenv("USE_SEMANTIC_SCHOLAR", "true").lower() in ("1", "true", "yes")
+
 # Ollama
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
