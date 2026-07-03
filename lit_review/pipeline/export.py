@@ -103,3 +103,76 @@ def export_comprehensive(
             writer.writerow(row_dict)
 
     return output_path
+
+
+def export_final_ranked(
+    output_path: Path | str | None = None,
+    db_path: Path | str | None = None,
+) -> Path:
+    """Export the final ranked shortlist (include verdicts / overrides only)."""
+    output_path = Path(output_path or config.DATA_DIR / "final_ranked.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fieldnames = [
+        "rank",
+        "paper_id",
+        "canonical_title",
+        "doi",
+        "venue",
+        "venue_tier",
+        "pub_year",
+        "citation_count",
+        "authors",
+        "origin",
+        "discovery_round",
+        "llm_verdict",
+        "llm_reason",
+        "human_override",
+        "final_score",
+        "component_breakdown",
+        "sources",
+    ]
+
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                p.id AS paper_id,
+                p.canonical_title,
+                p.doi,
+                p.venue,
+                p.venue_tier,
+                p.pub_year,
+                p.citation_count,
+                p.authors,
+                p.origin,
+                p.discovery_round,
+                sd.llm_verdict,
+                sd.llm_reason,
+                sd.human_override,
+                ps.final_score,
+                ps.component_breakdown,
+                GROUP_CONCAT(DISTINCT psrc.source_name) AS sources
+            FROM papers p
+            JOIN screening_decisions sd ON sd.paper_id = p.id
+            LEFT JOIN paper_scores ps ON ps.paper_id = p.id
+            LEFT JOIN paper_sources psrc ON psrc.paper_id = p.id
+            WHERE COALESCE(sd.human_override, sd.llm_verdict) IN (?, ?)
+            GROUP BY p.id
+            ORDER BY COALESCE(ps.final_score, 0) DESC, p.canonical_title ASC
+            """,
+            ("include", "uncertain"),
+        ).fetchall()
+
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for rank, row in enumerate(rows, start=1):
+            row_dict = dict(row)
+            row_dict["rank"] = rank
+            row_dict["authors"] = "; ".join(_decode_json(row_dict.get("authors")))
+            breakdown = _decode_json(row_dict.get("component_breakdown"))
+            row_dict["component_breakdown"] = json.dumps(breakdown)
+            writer.writerow(row_dict)
+
+    return output_path
