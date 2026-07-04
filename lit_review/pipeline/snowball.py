@@ -10,7 +10,7 @@ import httpx
 import structlog
 
 from lit_review import config, utils
-from lit_review.db import get_connection
+from lit_review.db import get_active_criteria, get_connection
 from lit_review.models import Paper, PaperOrigin, Verdict
 from lit_review.sources import openalex, semantic_scholar
 
@@ -166,15 +166,19 @@ async def run_snowball_round(
     client = client or httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT)
 
     with get_connection(db_path) as conn:
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
+
         if source_paper_ids is None:
             rows = conn.execute(
                 """
                 SELECT DISTINCT p.id
                 FROM papers p
-                JOIN screening_decisions sd ON sd.paper_id = p.id
+                JOIN screening_decisions sd
+                    ON sd.paper_id = p.id AND sd.criteria_version = ?
                 WHERE sd.llm_verdict IN (?, ?)
                 """,
-                (Verdict.INCLUDE.value, Verdict.UNCERTAIN.value),
+                (criteria_version, Verdict.INCLUDE.value, Verdict.UNCERTAIN.value),
             ).fetchall()
             source_paper_ids = [int(row["id"]) for row in rows]
 

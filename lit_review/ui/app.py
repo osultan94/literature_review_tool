@@ -56,6 +56,8 @@ async def index(request: Request) -> HTMLResponse:
 async def dashboard() -> dict[str, Any]:
     db_path = _get_db_path()
     with get_connection(db_path) as conn:
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
         seed_total = conn.execute("SELECT COUNT(*) FROM seeds").fetchone()[0]
         seed_extracted = conn.execute(
             "SELECT COUNT(*) FROM seeds WHERE status = ?", (SeedStatus.EXTRACTED.value,)
@@ -65,19 +67,25 @@ async def dashboard() -> dict[str, Any]:
         ).fetchone()[0]
         paper_total = conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
         include = conn.execute(
-            "SELECT COUNT(*) FROM screening_decisions WHERE llm_verdict = ?",
-            (Verdict.INCLUDE.value,),
+            "SELECT COUNT(*) FROM screening_decisions "
+            "WHERE criteria_version = ? AND llm_verdict = ?",
+            (criteria_version, Verdict.INCLUDE.value),
         ).fetchone()[0]
         exclude = conn.execute(
-            "SELECT COUNT(*) FROM screening_decisions WHERE llm_verdict = ?",
-            (Verdict.EXCLUDE.value,),
+            "SELECT COUNT(*) FROM screening_decisions "
+            "WHERE criteria_version = ? AND llm_verdict = ?",
+            (criteria_version, Verdict.EXCLUDE.value),
         ).fetchone()[0]
         uncertain = conn.execute(
-            "SELECT COUNT(*) FROM screening_decisions WHERE llm_verdict = ?",
-            (Verdict.UNCERTAIN.value,),
+            "SELECT COUNT(*) FROM screening_decisions "
+            "WHERE criteria_version = ? AND llm_verdict = ?",
+            (criteria_version, Verdict.UNCERTAIN.value),
         ).fetchone()[0]
-        unscreened = paper_total - (include + exclude + uncertain)
-        criteria = get_active_criteria(conn)
+        screened = conn.execute(
+            "SELECT COUNT(DISTINCT paper_id) FROM screening_decisions WHERE criteria_version = ?",
+            (criteria_version,),
+        ).fetchone()[0]
+        unscreened = paper_total - screened
         weight = get_active_weight_config(conn)
 
     saturation = check_saturation(db_path=db_path)
@@ -114,31 +122,40 @@ async def list_papers(
     }.get(sort, "COALESCE(ps.final_score, 0)")
     order_sql = "DESC" if order.lower() == "desc" else "ASC"
 
-    params: list[Any] = []
-    where_clauses = ["1=1"]
-    if q:
-        where_clauses.append("(p.canonical_title LIKE ? OR p.abstract LIKE ?)")
-        params.extend([f"%{q}%", f"%{q}%"])
-    if verdict:
-        where_clauses.append("sd.llm_verdict = ?")
-        params.append(verdict)
-
-    sql = f"""
-        SELECT
-            p.id, p.canonical_title, p.doi, p.venue, p.venue_tier,
-            p.pub_year, p.citation_count, p.authors, p.origin, p.discovery_round,
-            sd.llm_verdict, sd.llm_reason, sd.human_override, sd.human_note,
-            ps.final_score, ps.component_breakdown
-        FROM papers p
-        LEFT JOIN screening_decisions sd ON sd.paper_id = p.id
-        LEFT JOIN paper_scores ps ON ps.paper_id = p.id
-        WHERE {' AND '.join(where_clauses)}
-        ORDER BY {sort_column} {order_sql}, p.canonical_title ASC
-        LIMIT ?
-    """
-    params.append(limit)
-
     with get_connection(db_path) as conn:
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
+        weight = get_active_weight_config(conn)
+        weight_version = weight.version if weight else 0
+
+        params: list[Any] = [criteria_version, weight_version]
+        where_clauses = ["1=1"]
+        if q:
+            where_clauses.append("(p.canonical_title LIKE ? OR p.abstract LIKE ?)")
+            params.extend([f"%{q}%", f"%{q}%"])
+        if verdict == "unscreened":
+            where_clauses.append("sd.id IS NULL")
+        elif verdict:
+            where_clauses.append("sd.llm_verdict = ?")
+            params.append(verdict)
+
+        sql = f"""
+            SELECT
+                p.id, p.canonical_title, p.doi, p.venue, p.venue_tier,
+                p.pub_year, p.citation_count, p.authors, p.origin, p.discovery_round,
+                sd.llm_verdict, sd.llm_reason, sd.human_override, sd.human_note,
+                ps.final_score, ps.component_breakdown
+            FROM papers p
+            LEFT JOIN screening_decisions sd
+                ON sd.paper_id = p.id AND sd.criteria_version = ?
+            LEFT JOIN paper_scores ps
+                ON ps.paper_id = p.id AND ps.weight_version = ?
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY {sort_column} {order_sql}, p.canonical_title ASC
+            LIMIT ?
+        """
+        params.append(limit)
+
         rows = conn.execute(sql, params).fetchall()
 
     results = []
@@ -158,13 +175,29 @@ async def override_paper(
     if override not in {v.value for v in Verdict}:
         return {"error": "invalid override"}
     with get_connection(db_path) as conn:
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
         conn.execute(
             """
-            UPDATE screening_decisions
-            SET human_override = ?, human_note = ?
-            WHERE paper_id = ?
+            INSERT INTO screening_decisions (
+                paper_id, criteria_version, llm_verdict, llm_reason,
+                llm_raw_response, model_name, model_params, human_override, human_note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(paper_id, criteria_version) DO UPDATE SET
+                human_override = excluded.human_override,
+                human_note = excluded.human_note
             """,
-            (override, note or None, paper_id),
+            (
+                paper_id,
+                criteria_version,
+                override,
+                "human override",
+                "{}",
+                "manual",
+                "{}",
+                override,
+                note or None,
+            ),
         )
         conn.commit()
     return {"status": "ok"}

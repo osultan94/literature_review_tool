@@ -9,7 +9,12 @@ from pathlib import Path
 import structlog
 
 from lit_review import utils
-from lit_review.db import get_active_weight_config, get_connection, row_to_paper
+from lit_review.db import (
+    get_active_criteria,
+    get_active_weight_config,
+    get_connection,
+    row_to_paper,
+)
 from lit_review.models import Verdict
 
 logger = structlog.get_logger()
@@ -66,14 +71,18 @@ def compute_scores(
 
         weights = weight_config.component_weights
 
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
+
         rows = conn.execute(
             """
             SELECT p.*, sd.llm_verdict
             FROM papers p
             LEFT JOIN screening_decisions sd
-                ON sd.paper_id = p.id
+                ON sd.paper_id = p.id AND sd.criteria_version = ?
             WHERE sd.id IS NOT NULL OR p.abstract IS NULL
-            """
+            """,
+            (criteria_version,),
         ).fetchall()
         papers = [(row_to_paper(row), row["llm_verdict"]) for row in rows]
 

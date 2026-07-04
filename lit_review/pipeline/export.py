@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from lit_review import config
-from lit_review.db import get_connection
+from lit_review.db import get_active_criteria, get_active_weight_config, get_connection
 
 
 def _decode_json(value: str | None) -> Any:
@@ -56,6 +56,10 @@ def export_comprehensive(
     ]
 
     with get_connection(db_path) as conn:
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
+        weight = get_active_weight_config(conn)
+        weight_version = weight.version if weight else 0
         rows = conn.execute(
             """
             SELECT
@@ -84,12 +88,15 @@ def export_comprehensive(
                 ps.component_breakdown,
                 GROUP_CONCAT(DISTINCT psrc.source_name) AS sources
             FROM papers p
-            LEFT JOIN screening_decisions sd ON sd.paper_id = p.id
-            LEFT JOIN paper_scores ps ON ps.paper_id = p.id
+            LEFT JOIN screening_decisions sd
+                ON sd.paper_id = p.id AND sd.criteria_version = ?
+            LEFT JOIN paper_scores ps
+                ON ps.paper_id = p.id AND ps.weight_version = ?
             LEFT JOIN paper_sources psrc ON psrc.paper_id = p.id
             GROUP BY p.id
             ORDER BY COALESCE(ps.final_score, 0) DESC, p.canonical_title ASC
-            """
+            """,
+            (criteria_version, weight_version),
         ).fetchall()
 
     with output_path.open("w", newline="", encoding="utf-8") as f:
@@ -134,6 +141,10 @@ def export_final_ranked(
     ]
 
     with get_connection(db_path) as conn:
+        criteria = get_active_criteria(conn)
+        criteria_version = criteria.version if criteria else 0
+        weight = get_active_weight_config(conn)
+        weight_version = weight.version if weight else 0
         rows = conn.execute(
             """
             SELECT
@@ -154,14 +165,16 @@ def export_final_ranked(
                 ps.component_breakdown,
                 GROUP_CONCAT(DISTINCT psrc.source_name) AS sources
             FROM papers p
-            JOIN screening_decisions sd ON sd.paper_id = p.id
-            LEFT JOIN paper_scores ps ON ps.paper_id = p.id
+            JOIN screening_decisions sd
+                ON sd.paper_id = p.id AND sd.criteria_version = ?
+            LEFT JOIN paper_scores ps
+                ON ps.paper_id = p.id AND ps.weight_version = ?
             LEFT JOIN paper_sources psrc ON psrc.paper_id = p.id
             WHERE COALESCE(sd.human_override, sd.llm_verdict) IN (?, ?)
             GROUP BY p.id
             ORDER BY COALESCE(ps.final_score, 0) DESC, p.canonical_title ASC
             """,
-            ("include", "uncertain"),
+            (criteria_version, weight_version, "include", "uncertain"),
         ).fetchall()
 
     with output_path.open("w", newline="", encoding="utf-8") as f:
