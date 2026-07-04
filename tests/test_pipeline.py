@@ -109,6 +109,59 @@ def test_deduplicate_merges_by_doi(tmp_db: Path) -> None:
         assert count == 1
 
 
+def test_deduplicate_merges_papers_with_shared_source_name(tmp_db: Path) -> None:
+    """Merging must not fail when both papers have the same source_name."""
+    with get_connection(tmp_db) as conn:
+        conn.execute(
+            "INSERT INTO papers (canonical_title, doi, authors, origin) VALUES (?, ?, ?, ?)",
+            ("Paper A", "10.1234/a", json.dumps(["Alice"]), "seed"),
+        )
+        conn.execute(
+            "INSERT INTO papers (canonical_title, doi, authors, origin) VALUES (?, ?, ?, ?)",
+            ("Paper A duplicate", "10.1234/a", json.dumps(["Alice"]), "seed"),
+        )
+        # Both papers have a 'crossref' source row, which would violate the
+        # UNIQUE(paper_id, source_name) constraint during a naive UPDATE.
+        conn.execute(
+            "INSERT INTO paper_sources (paper_id, source_name, source_paper_id, raw_json) "
+            "VALUES (?, ?, ?, ?)",
+            (1, "crossref", "cr_1", "{}"),
+        )
+        conn.execute(
+            "INSERT INTO paper_sources (paper_id, source_name, source_paper_id, raw_json) "
+            "VALUES (?, ?, ?, ?)",
+            (2, "crossref", "cr_2", "{}"),
+        )
+        # drop_id has an extra source that keep_id lacks and should be moved over.
+        conn.execute(
+            "INSERT INTO paper_sources (paper_id, source_name, source_paper_id, raw_json) "
+            "VALUES (?, ?, ?, ?)",
+            (2, "openalex", "oa_2", "{}"),
+        )
+        conn.commit()
+
+    result = deduplicate(db_path=tmp_db)
+    assert result["merged"] == 1
+
+    with get_connection(tmp_db) as conn:
+        papers = conn.execute("SELECT * FROM papers ORDER BY id").fetchall()
+        assert len(papers) == 1
+        keep_id = papers[0]["id"]
+
+        sources = conn.execute(
+            "SELECT source_name, source_paper_id FROM paper_sources WHERE paper_id = ?",
+            (keep_id,),
+        ).fetchall()
+        source_names = {row["source_name"] for row in sources}
+        assert source_names == {"crossref", "openalex"}
+        # The conflicting crossref row from the merged paper should be dropped,
+        # keeping the original keep_id source.
+        assert any(
+            row["source_name"] == "crossref" and row["source_paper_id"] == "cr_1"
+            for row in sources
+        )
+
+
 def test_export_comprehensive(
     tmp_db: Path, seed_csv: Path, fake_extractor, s2_search_response
 ) -> None:
@@ -248,3 +301,51 @@ def test_export_final_ranked(tmp_db: Path) -> None:
     text = path.read_text()
     assert "Included Paper" in text
     assert "rank" in text
+
+
+def test_openalex_work_with_null_source() -> None:
+    """Snowball conversion must not crash when primary_location.source is None."""
+    from lit_review.pipeline.snowball import _candidate_from_openalex_work
+    from lit_review.models import PaperOrigin
+
+    work = {
+        "id": "https://openalex.org/W1234567890",
+        "display_name": "Test Paper",
+        "primary_location": {"source": None, "landing_page_url": "http://example.com"},
+        "publication_year": 2023,
+        "cited_by_count": 10,
+    }
+    paper = _candidate_from_openalex_work(work, PaperOrigin.SNOWBALL_FORWARD)
+    assert paper is not None
+    assert paper.canonical_title == "Test Paper"
+    assert paper.venue is None
+    assert paper.venue_tier is None
+
+
+async def test_fetch_references_normalizes_canonical_urls() -> None:
+    """referenced_works returns canonical URLs; we must call the API endpoint."""
+    import lit_review.sources.openalex as oa_mod
+
+    fetched_ids: list[str] = []
+
+    async def fake_fetch_work(work_id: str, client=None) -> dict[str, Any] | None:  # noqa: ANN001
+        fetched_ids.append(work_id)
+        if work_id == "W123":
+            return {
+                "id": "https://openalex.org/W123",
+                "referenced_works": [
+                    "https://openalex.org/W456",
+                    "https://openalex.org/W789",
+                ],
+            }
+        return {"id": f"https://openalex.org/{work_id}", "display_name": f"Paper {work_id}"}
+
+    monkeypatched_fetch = oa_mod.fetch_work
+    oa_mod.fetch_work = fake_fetch_work
+    try:
+        results = await oa_mod.fetch_references("W123", client=httpx.AsyncClient())
+    finally:
+        oa_mod.fetch_work = monkeypatched_fetch
+
+    assert fetched_ids == ["W123", "W456", "W789"]
+    assert len(results) == 2

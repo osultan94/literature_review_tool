@@ -19,6 +19,18 @@ def _merge_papers(conn: sqlite3.Connection, keep_id: int, drop_id: int) -> None:
     conn.execute(
         "UPDATE seeds SET resolved_paper_id = ? WHERE resolved_paper_id = ?", (keep_id, drop_id)
     )
+    # paper_sources has a UNIQUE(paper_id, source_name) constraint. If both papers
+    # have a source with the same name, drop the duplicate from the paper being
+    # merged away rather than failing the UPDATE.
+    conn.execute(
+        """
+        DELETE FROM paper_sources
+        WHERE paper_id = ? AND source_name IN (
+            SELECT source_name FROM paper_sources WHERE paper_id = ?
+        )
+        """,
+        (drop_id, keep_id),
+    )
     conn.execute(
         "UPDATE paper_sources SET paper_id = ? WHERE paper_id = ?", (keep_id, drop_id)
     )

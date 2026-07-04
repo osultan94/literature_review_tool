@@ -48,20 +48,21 @@ def _candidate_from_openalex_work(work: dict[str, Any], direction: PaperOrigin) 
     if not work_id or not title:
         return None
     authors = []
-    for authorship in work.get("authorships", []):
+    for authorship in work.get("authorships", []) or []:
         author = authorship.get("author") or {}
         if author.get("display_name"):
             authors.append(author["display_name"])
+    primary_location = work.get("primary_location") or {}
+    source = primary_location.get("source") or {}
+    venue = source.get("display_name")
     return Paper(
         canonical_title=title,
         doi=(work.get("ids") or {}).get("doi") or work.get("doi"),
         primary_source_name="openalex",
         primary_source_id=work_id,
         abstract=work.get("abstract"),
-        venue=(work.get("primary_location") or {}).get("source", {}).get("display_name"),
-        venue_tier=_venue_tier(
-            (work.get("primary_location") or {}).get("source", {}).get("display_name")
-        ),
+        venue=venue,
+        venue_tier=_venue_tier(venue),
         pub_year=utils.parse_year(work.get("publication_year")),
         citation_count=work.get("cited_by_count"),
         citation_count_fetched_at=utils.utc_now(),

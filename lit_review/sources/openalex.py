@@ -12,6 +12,10 @@ from lit_review.models import ResolvedCandidate
 
 BASE_URL = "https://api.openalex.org"
 
+# OpenAlex asks polite users to stay under ~10 req/s. We target 8 req/s to leave
+# headroom for network jitter and shared clients.
+_rate_limiter = utils.RateLimiter(rate_per_second=8.0)
+
 
 def _params() -> dict[str, str]:
     params = {"per-page": "5"}
@@ -33,6 +37,9 @@ def _to_candidate(item: dict[str, Any], query_title: str) -> ResolvedCandidate:
         if name:
             authors.append(name)
     title = item.get("display_name") or ""
+    primary_location = item.get("primary_location") or {}
+    source = primary_location.get("source") or {}
+    venue = source.get("display_name")
     return ResolvedCandidate(
         source_name="openalex",
         source_paper_id=item.get("id", ""),
@@ -41,7 +48,7 @@ def _to_candidate(item: dict[str, Any], query_title: str) -> ResolvedCandidate:
         authors=authors,
         pub_year=utils.parse_year(item.get("publication_year")),
         abstract=item.get("abstract"),
-        venue=(item.get("primary_location") or {}).get("source", {}).get("display_name"),
+        venue=venue,
         citation_count=item.get("cited_by_count"),
         similarity_ratio=utils.title_similarity(query_title, title),
     )
@@ -55,6 +62,7 @@ async def search_by_title(
     should_close = client is None
     client = client or httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT)
     try:
+        await _rate_limiter.acquire()
         params = _params()
         params["search"] = title
         params["per-page"] = str(limit)
@@ -79,8 +87,12 @@ async def fetch_work(
     should_close = client is None
     client = client or httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT)
     try:
+        await _rate_limiter.acquire()
+        # referenced_works returns canonical https://openalex.org/W... URLs.
+        # Always route through the API endpoint to avoid 403s from the web URL.
+        normalized_id = _normalize_work_id(work_id)
         response = await client.get(
-            work_id if work_id.startswith("http") else f"{BASE_URL}/works/{work_id}",
+            f"{BASE_URL}/works/{normalized_id}",
             params={"mailto": config.OPENALEX_EMAIL} if config.OPENALEX_EMAIL else {},
         )
         if response.status_code == 404:
@@ -104,7 +116,7 @@ async def fetch_references(
         work = await fetch_work(work_id, client=client)
         if not work:
             return []
-        refs = work.get("referenced_works", [])[:limit]
+        refs = [_normalize_work_id(rid) for rid in work.get("referenced_works", [])[:limit]]
         if not refs:
             return []
         # Fetch each referenced work in parallel batches to be polite
@@ -149,6 +161,7 @@ async def fetch_citations(
         }
         if config.OPENALEX_EMAIL:
             params["mailto"] = config.OPENALEX_EMAIL
+        await _rate_limiter.acquire()
         response = await client.get(f"{BASE_URL}/works", params=params)
         response.raise_for_status()
         data = cast(dict[str, Any], response.json())
