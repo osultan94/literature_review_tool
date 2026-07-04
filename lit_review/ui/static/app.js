@@ -269,6 +269,10 @@ $('#run-all-btn').addEventListener('click', async () => {
     const seeds = $('#run-all-seeds').value.trim();
     if (!seeds) return alert('Please enter at least one seed title');
     const snowballRounds = parseInt($('#run-all-snowball').value, 10) || 0;
+    const btn = $('#run-all-btn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Running...';
     showSpinner(true);
     logRun('Starting full pipeline...');
     try {
@@ -282,8 +286,11 @@ $('#run-all-btn').addEventListener('click', async () => {
         if ($('#papers').classList.contains('active')) loadPapers();
     } catch (err) {
         logRun(`Full pipeline error: ${err.message}`);
+        alert(`Pipeline failed: ${err.message}`);
     } finally {
         showSpinner(false);
+        btn.disabled = false;
+        btn.textContent = originalText;
     }
 });
 
