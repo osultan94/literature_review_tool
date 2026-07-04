@@ -10,7 +10,7 @@ import httpx
 import structlog
 
 from lit_review import config, utils
-from lit_review.db import get_active_criteria, get_connection
+from lit_review.db import get_active_criteria, get_connection, row_to_paper
 from lit_review.models import Paper, PaperOrigin, Verdict
 from lit_review.sources import openalex, semantic_scholar
 
@@ -145,6 +145,50 @@ def _insert_paper(conn: sqlite3.Connection, paper: Paper, round_number: int) -> 
     return int(paper_id)
 
 
+async def _resolve_snowball_source(
+    conn: sqlite3.Connection,
+    paper: Paper,
+    client: httpx.AsyncClient,
+) -> tuple[str, str] | None:
+    """Return a (source_name, native_id) pair usable for snowballing.
+
+    If the paper already has a Semantic Scholar or OpenAlex ID we use it.
+    Otherwise we try to look it up in OpenAlex by DOI or title so that
+    CrossRef/arXiv-derived papers can still be expanded.
+    """
+    if paper.primary_source_name in ("semantic_scholar", "openalex") and paper.primary_source_id:
+        return paper.primary_source_name, paper.primary_source_id
+
+    if paper.doi:
+        try:
+            work = await openalex.fetch_work(f"doi:{paper.doi}", client=client)
+            if work and work.get("id"):
+                return "openalex", work["id"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "snowball_openalex_doi_lookup_failed",
+                paper_id=paper.id,
+                doi=paper.doi,
+                error=str(exc),
+            )
+
+    try:
+        candidates = await openalex.search_by_title(
+            paper.canonical_title, limit=1, client=client
+        )
+        if candidates and candidates[0].similarity_ratio >= config.TITLE_MATCH_MIN_RATIO:
+            return "openalex", candidates[0].source_paper_id
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "snowball_openalex_search_failed",
+            paper_id=paper.id,
+            title=paper.canonical_title,
+            error=str(exc),
+        )
+
+    return None
+
+
 async def run_snowball_round(
     db_path: Path | str | None = None,
     source_paper_ids: list[int] | None = None,
@@ -195,14 +239,20 @@ async def run_snowball_round(
         total_results = 0
 
         for source_id in source_paper_ids:
-            source_row = conn.execute(
-                "SELECT primary_source_name, primary_source_id FROM papers WHERE id = ?",
-                (source_id,),
-            ).fetchone()
-            if not source_row or not source_row["primary_source_id"]:
+            paper_row = conn.execute("SELECT * FROM papers WHERE id = ?", (source_id,)).fetchone()
+            if not paper_row:
                 continue
-            source_name = source_row["primary_source_name"]
-            source_native_id = source_row["primary_source_id"]
+            source_paper = row_to_paper(paper_row)
+
+            resolved = await _resolve_snowball_source(conn, source_paper, client)
+            if not resolved:
+                logger.warning(
+                    "snowball_no_usable_source_id",
+                    paper_id=source_id,
+                    title=source_paper.canonical_title,
+                )
+                continue
+            source_name, source_native_id = resolved
 
             fetched_items: list[tuple[Paper, str]] = []
 

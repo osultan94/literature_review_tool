@@ -89,6 +89,18 @@
                 <button class="run-btn" data-stage="snowball">Snowball round</button>
                 <button class="run-btn" data-stage="export">Export CSVs</button>
             </div>
+
+            <div class="card">
+                <h3>Run full pipeline from seeds</h3>
+                <p>Paste one seed title per line. This will ingest, resolve, harvest, dedupe, screen, score, and export.</p>
+                <textarea id="run-all-seeds" rows="6" placeholder="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
+Chain-of-Thought Prompting Elicits Reasoning in Large Language Models"></textarea>
+                <label>Snowball rounds (0 to skip):
+                    <input type="number" id="run-all-snowball" value="0" min="0" max="10" style="width: 80px;">
+                </label>
+                <button id="run-all-btn">Run full pipeline</button>
+            </div>
+
             <pre id="run-log"></pre>
         </section>
 

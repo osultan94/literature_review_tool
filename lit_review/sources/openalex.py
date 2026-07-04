@@ -126,6 +126,14 @@ async def fetch_references(
             await client.aclose()
 
 
+def _normalize_work_id(work_id: str) -> str:
+    """Return the bare OpenAlex work ID, stripping the canonical URL prefix."""
+    prefix = "https://openalex.org/"
+    if work_id.startswith(prefix):
+        return work_id[len(prefix) :]
+    return work_id
+
+
 async def fetch_citations(
     work_id: str,
     client: httpx.AsyncClient | None = None,
@@ -136,7 +144,7 @@ async def fetch_citations(
     client = client or httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT)
     try:
         params: dict[str, Any] = {
-            "filter": f"cites:{work_id}",
+            "filter": f"cites:{_normalize_work_id(work_id)}",
             "per-page": min(limit, 200),
         }
         if config.OPENALEX_EMAIL:

@@ -265,6 +265,28 @@ $$('.run-btn').forEach(btn => {
     });
 });
 
+$('#run-all-btn').addEventListener('click', async () => {
+    const seeds = $('#run-all-seeds').value.trim();
+    if (!seeds) return alert('Please enter at least one seed title');
+    const snowballRounds = parseInt($('#run-all-snowball').value, 10) || 0;
+    showSpinner(true);
+    logRun('Starting full pipeline...');
+    try {
+        const res = await api('/api/run-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `seeds=${encodeURIComponent(seeds)}&snowball_rounds=${encodeURIComponent(snowballRounds)}`
+        });
+        logRun(`Full pipeline finished: ${JSON.stringify(res)}`);
+        if ($('#dashboard').classList.contains('active')) loadDashboard();
+        if ($('#papers').classList.contains('active')) loadPapers();
+    } catch (err) {
+        logRun(`Full pipeline error: ${err.message}`);
+    } finally {
+        showSpinner(false);
+    }
+});
+
 // Helpers
 function escapeHtml(text) {
     const div = document.createElement('div');

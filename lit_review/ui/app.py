@@ -369,6 +369,71 @@ async def run_stage(stage: str, background_tasks: BackgroundTasks) -> dict[str, 
     return {"status": "ok", "stage": stage}
 
 
+@app.post("/api/run-all")
+async def run_all_pipeline(
+    seeds: str = Form(...),
+    snowball_rounds: int = Form(0),
+) -> dict[str, Any]:
+    """Run the full pipeline from a list of raw seed titles."""
+    db_path = _get_db_path()
+    csv_path = db_path.parent / "run_all_seeds.csv"
+    csv_path.write_text(
+        "\n".join(line.strip() for line in seeds.splitlines() if line.strip()),
+        encoding="utf-8",
+    )
+
+    result: dict[str, Any] = {
+        "ingested": 0,
+        "resolved": 0,
+        "harvested": 0,
+        "deduped": {"merged": 0, "flagged": 0},
+        "screened": 0,
+        "scored": 0,
+        "snowball_rounds": 0,
+        "snowball": [],
+        "exports": [],
+    }
+
+    ingest_result = await ingest_seeds(csv_path, db_path=db_path)
+    result["ingested"] = ingest_result["inserted"]
+
+    async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as client:
+        resolve_result = await resolve_seeds(db_path=db_path, client=client)
+        result["resolved"] = resolve_result["resolved"]
+        harvest_result = await harvest_metadata(db_path=db_path, client=client)
+        result["harvested"] = harvest_result["harvested"]
+
+    dedup_result = deduplicate(db_path=db_path)
+    result["deduped"] = {
+        "merged": dedup_result["merged"],
+        "flagged": len(dedup_result["flagged_pairs"]),
+    }
+
+    screen_result = await screen_papers(db_path=db_path)
+    result["screened"] = screen_result["screened"]
+
+    score_result = compute_scores(db_path=db_path)
+    result["scored"] = score_result["scored"]
+
+    for _ in range(snowball_rounds):
+        async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as client:
+            snowball_result = await run_snowball_round(db_path=db_path, client=client)
+        result["snowball_rounds"] += 1
+        result["snowball"].append(snowball_result)
+        if snowball_result["new_papers"] == 0:
+            break
+        async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as client:
+            await harvest_metadata(db_path=db_path, client=client)
+        deduplicate(db_path=db_path)
+        await screen_papers(db_path=db_path)
+        compute_scores(db_path=db_path)
+
+    comp_path = export_comprehensive(db_path=db_path)
+    ranked_path = export_final_ranked(db_path=db_path)
+    result["exports"] = [str(comp_path), str(ranked_path)]
+    return result
+
+
 @app.get("/api/export/comprehensive")
 async def download_comprehensive() -> FileResponse:
     db_path = _get_db_path()
