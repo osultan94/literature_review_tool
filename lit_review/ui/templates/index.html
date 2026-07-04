@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Literature Review Automation</title>
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
     <header>
@@ -92,9 +92,9 @@
 
             <div class="card">
                 <h3>Run full pipeline from seeds</h3>
-                <p>Paste one seed title per line. This will ingest, resolve, harvest, dedupe, screen, score, and export.</p>
-                <textarea id="run-all-seeds" rows="6" placeholder="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
-Chain-of-Thought Prompting Elicits Reasoning in Large Language Models"></textarea>
+                <p>This will ingest, resolve, harvest, dedupe, screen, score, and export.</p>
+                <label for="run-all-seeds"><strong>Seed titles (one per line)</strong></label>
+                <textarea id="run-all-seeds" rows="6" placeholder="e.g. Attention Is All You Need"></textarea>
                 <label>Snowball rounds (0 to skip):
                     <input type="number" id="run-all-snowball" value="0" min="0" max="10" style="width: 80px;">
                 </label>
@@ -112,6 +112,6 @@ Chain-of-Thought Prompting Elicits Reasoning in Large Language Models"></textare
     </main>
 
     <div id="spinner" class="hidden">Running...</div>
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=3"></script>
 </body>
 </html>
